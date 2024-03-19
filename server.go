@@ -20,6 +20,9 @@ type server struct {
 	lastClientId int64
 	clientsLock  sync.Mutex
 	shuttingDown bool
+
+	dbLock   sync.RWMutex
+	database map[string]string
 }
 
 func NewServer(listener net.Listener, logger *slog.Logger) *server {
@@ -32,6 +35,9 @@ func NewServer(listener net.Listener, logger *slog.Logger) *server {
 		lastClientId: 0,
 		clientsLock:  sync.Mutex{},
 		shuttingDown: false,
+
+		dbLock:   sync.RWMutex{},
+		database: make(map[string]string),
 	}
 }
 
@@ -187,9 +193,17 @@ func (s *server) handleGetCommand(clientId int64, conn net.Conn, command []any) 
 
 	s.logger.Debug("GET key", slog.String("key", key), slog.Int64("clientId", clientId))
 
-	// TODO: GET the key here
+	s.dbLock.RLock()
+	value, ok := s.database[key]
+	s.dbLock.RUnlock()
 
-	_, err := conn.Write([]byte("_\r\n"))
+	var err error
+	if ok {
+		resp := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+		_, err = conn.Write([]byte(resp))
+	} else {
+		_, err = conn.Write([]byte("_\r\n"))
+	}
 	return err
 }
 
@@ -218,7 +232,9 @@ func (s *server) handleSetCommand(clientId int64, conn net.Conn, command []any) 
 		slog.Int64("clientId", clientId),
 	)
 
-	// TODO: SET the key here
+	s.dbLock.Lock()
+	s.database[key] = value
+	s.dbLock.Unlock()
 
 	_, err := conn.Write([]byte("+OK\r\n"))
 	return err
