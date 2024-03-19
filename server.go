@@ -16,6 +16,7 @@ type server struct {
 	clients      map[int64]net.Conn
 	lastClientId int64
 	clientsLock  sync.Mutex
+	shuttingDown bool
 }
 
 func NewServer(listener net.Listener, logger *slog.Logger) *server {
@@ -27,6 +28,7 @@ func NewServer(listener net.Listener, logger *slog.Logger) *server {
 		clients:      make(map[int64]net.Conn, 100),
 		lastClientId: 0,
 		clientsLock:  sync.Mutex{},
+		shuttingDown: false,
 	}
 }
 
@@ -39,12 +41,14 @@ func (s *server) Start() error {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
-			// TODO: handle shutdown.
-			// at this point, the server might be shutting down.
-			// or there is a network problem that causing the server can't accept new connections.
-			// If it's the former, we just need to do some cleanup.
-			// If it's the latter, we just need to return the error, nothing we can do anyway.
-			break
+			s.clientsLock.Lock()
+			isShuttingDown := s.shuttingDown
+			s.clientsLock.Unlock()
+
+			if !isShuttingDown {
+				return err
+			}
+			return nil
 		}
 
 		s.clientsLock.Lock()
@@ -54,13 +58,16 @@ func (s *server) Start() error {
 		s.clientsLock.Unlock()
 		go s.handleConn(clientId, conn)
 	}
-
-	return nil
 }
 
 func (s *server) Stop() error {
 	s.clientsLock.Lock()
 	defer s.clientsLock.Unlock()
+
+	if s.shuttingDown {
+		return fmt.Errorf("already shutting down")
+	}
+	s.shuttingDown = true
 
 	for clientId, conn := range s.clients {
 		s.logger.Info(
