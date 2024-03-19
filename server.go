@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -104,8 +105,7 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 	)
 
 	for {
-		buff := make([]byte, 4096)
-		n, err := conn.Read(buff)
+		request, err := readArray(conn, true)
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
 				s.logger.Error(
@@ -114,15 +114,37 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 					slog.String("err", err.Error()),
 				)
 			}
-
 			break
 		}
 
-		if n == 0 {
+		s.logger.Debug(
+			"request received",
+			slog.Any("request", request),
+			slog.Int64("clientId", clientId),
+		)
+
+		if len(request) == 0 {
+			s.logger.Error("missing command in the request", slog.Int64("clientId", clientId))
 			break
 		}
 
-		if _, err := conn.Write(buff[:n]); err != nil {
+		commandName, ok := request[0].(string)
+		if !ok {
+			s.logger.Error("command is not a string", slog.Int64("clientId", clientId))
+			break
+		}
+
+		switch strings.ToUpper(commandName) {
+		case "GET":
+			s.logger.Debug("handle get command", slog.Int64("clientId", clientId))
+		case "SET":
+			s.logger.Debug("handle set command", slog.Int64("clientId", clientId))
+		default:
+			s.logger.Error("unknown command", slog.String("command", commandName), slog.Int64("clientId", clientId))
+			break
+		}
+
+		if _, err := conn.Write([]byte("+OK\r\n")); err != nil {
 			s.logger.Error(
 				"error writing to client",
 				slog.Int64("clientId", clientId),
