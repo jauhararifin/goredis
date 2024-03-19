@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
 )
 
@@ -11,7 +12,10 @@ type server struct {
 	listener net.Listener
 	logger   *slog.Logger
 
-	started atomic.Bool
+	started      atomic.Bool
+	clients      map[int64]net.Conn
+	lastClientId int64
+	clientsLock  sync.Mutex
 }
 
 func NewServer(listener net.Listener, logger *slog.Logger) *server {
@@ -19,7 +23,10 @@ func NewServer(listener net.Listener, logger *slog.Logger) *server {
 		listener: listener,
 		logger:   logger,
 
-		started: atomic.Bool{},
+		started:      atomic.Bool{},
+		clients:      make(map[int64]net.Conn, 100),
+		lastClientId: 0,
+		clientsLock:  sync.Mutex{},
 	}
 }
 
@@ -40,13 +47,36 @@ func (s *server) Start() error {
 			break
 		}
 
-		go s.handleConn(conn)
+		s.clientsLock.Lock()
+		s.lastClientId += 1
+		clientId := s.lastClientId
+		s.clients[clientId] = conn
+		s.clientsLock.Unlock()
+		go s.handleConn(clientId, conn)
 	}
 
 	return nil
 }
 
 func (s *server) Stop() error {
+	s.clientsLock.Lock()
+	defer s.clientsLock.Unlock()
+
+	for clientId, conn := range s.clients {
+		s.logger.Info(
+			"closing client",
+			slog.Int64("clientId", clientId),
+		)
+		if err := conn.Close(); err != nil {
+			s.logger.Error(
+				"cannot close client",
+				slog.Int64("clientId", clientId),
+				slog.String("err", err.Error()),
+			)
+		}
+	}
+	clear(s.clients)
+
 	if err := s.listener.Close(); err != nil {
 		s.logger.Error(
 			"cannot stop listener",
@@ -54,16 +84,16 @@ func (s *server) Stop() error {
 		)
 	}
 
-	// Notice that we haven't close all remaining active connections here.
-	// In Linux and in this particular case, it's technically necessary
-	// because closing the listener will also close all remaining connections.
-	// But, in some cases, we might need some kind of graceful shutdown logic
-	// when closing the client.
-
 	return nil
 }
 
-func (s *server) handleConn(conn net.Conn) {
+func (s *server) handleConn(clientId int64, conn net.Conn) {
+	s.logger.Info(
+		"client connected",
+		slog.Int64("id", clientId),
+		slog.String("host", conn.RemoteAddr().String()),
+	)
+
 	for {
 		buff := make([]byte, 4096)
 		n, err := conn.Read(buff)
@@ -81,5 +111,21 @@ func (s *server) handleConn(conn net.Conn) {
 			// TODO: handle the error
 			break
 		}
+	}
+
+	s.clientsLock.Lock()
+	if _, ok := s.clients[clientId]; !ok {
+		s.clientsLock.Unlock()
+		return
+	}
+	delete(s.clients, clientId)
+	s.clientsLock.Unlock()
+
+	if err := conn.Close(); err != nil {
+		s.logger.Error(
+			"cannot close client",
+			slog.Int64("clientId", clientId),
+			slog.String("err", err.Error()),
+		)
 	}
 }
