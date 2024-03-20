@@ -166,6 +166,15 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 			)
 			break
 		}
+
+		if err := writer.Flush(); err != nil {
+			s.logger.Error(
+				"error flushing to client",
+				slog.Int64("clientId", clientId),
+				slog.String("err", err.Error()),
+			)
+			break
+		}
 	}
 
 	s.clientsLock.Lock()
