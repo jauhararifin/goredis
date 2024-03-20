@@ -8,13 +8,22 @@ import (
 	"math/rand"
 	"net"
 	"os"
+	"runtime/pprof"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const sockfilePath string = "/tmp/redisexperiment.sock"
 
 func TestServerBootstrap(t *testing.T) {
+	timer := time.AfterFunc(5*time.Second, func() {
+		pprof.Lookup("goroutine").WriteTo(os.Stdout, 1)
+		t.Errorf("test runs too long, something is wrong")
+		t.FailNow()
+	})
+	defer timer.Stop()
+
 	_ = os.Remove(sockfilePath)
 	listener, err := net.Listen("unix", sockfilePath)
 	if err != nil {
