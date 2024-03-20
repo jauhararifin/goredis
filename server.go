@@ -73,6 +73,9 @@ func (s *server) Stop() error {
 	s.clientsLock.Lock()
 	defer s.clientsLock.Unlock()
 
+	if !s.started.Load() {
+		return fmt.Errorf("server not started yet")
+	}
 	if s.shuttingDown {
 		return fmt.Errorf("already shutting down")
 	}
