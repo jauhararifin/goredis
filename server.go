@@ -22,8 +22,7 @@ type server struct {
 	clientsLock  sync.Mutex
 	shuttingDown bool
 
-	dbLock   sync.RWMutex
-	database map[string]string
+	database sync.Map
 }
 
 func NewServer(listener net.Listener, logger *slog.Logger) *server {
@@ -37,8 +36,7 @@ func NewServer(listener net.Listener, logger *slog.Logger) *server {
 		clientsLock:  sync.Mutex{},
 		shuttingDown: false,
 
-		dbLock:   sync.RWMutex{},
-		database: make(map[string]string),
+		database: sync.Map{},
 	}
 }
 
@@ -210,12 +208,11 @@ func (s *server) handleGetCommand(clientId int64, conn io.Writer, command []any)
 
 	s.logger.Debug("GET key", slog.String("key", key), slog.Int64("clientId", clientId))
 
-	s.dbLock.RLock()
-	value, ok := s.database[key]
-	s.dbLock.RUnlock()
+	valueObj, ok := s.database.Load(key)
 
 	var err error
 	if ok {
+		value := valueObj.(string)
 		resp := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 		_, err = conn.Write([]byte(resp))
 	} else {
@@ -249,9 +246,7 @@ func (s *server) handleSetCommand(clientId int64, conn io.Writer, command []any)
 		slog.Int64("clientId", clientId),
 	)
 
-	s.dbLock.Lock()
-	s.database[key] = value
-	s.dbLock.Unlock()
+	s.database.Store(key, value)
 
 	_, err := conn.Write([]byte("+OK\r\n"))
 	return err
