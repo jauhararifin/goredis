@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 )
+
+const nShard = 1000
 
 type server struct {
 	listener net.Listener
@@ -22,11 +25,12 @@ type server struct {
 	clientsLock  sync.Mutex
 	shuttingDown bool
 
-	database sync.Map
+	dbLock   [nShard]sync.RWMutex
+	database [nShard]map[string]string
 }
 
 func NewServer(listener net.Listener, logger *slog.Logger) *server {
-	return &server{
+	s := &server{
 		listener: listener,
 		logger:   logger,
 
@@ -36,8 +40,15 @@ func NewServer(listener net.Listener, logger *slog.Logger) *server {
 		clientsLock:  sync.Mutex{},
 		shuttingDown: false,
 
-		database: sync.Map{},
+		dbLock:   [nShard]sync.RWMutex{},
+		database: [nShard]map[string]string{},
 	}
+
+	for i := 0; i < nShard; i++ {
+		s.database[i] = make(map[string]string)
+	}
+
+	return s
 }
 
 func (s *server) Start() error {
@@ -208,17 +219,26 @@ func (s *server) handleGetCommand(clientId int64, conn io.Writer, command []any)
 
 	s.logger.Debug("GET key", slog.String("key", key), slog.Int64("clientId", clientId))
 
-	valueObj, ok := s.database.Load(key)
+	shard := calculateShard(key)
+	s.dbLock[shard].RLock()
+	value, ok := s.database[shard][key]
+	s.dbLock[shard].RUnlock()
 
 	var err error
 	if ok {
-		value := valueObj.(string)
 		resp := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 		_, err = conn.Write([]byte(resp))
 	} else {
 		_, err = conn.Write([]byte("_\r\n"))
 	}
 	return err
+}
+
+func calculateShard(s string) int {
+	hasher := fnv.New64()
+	_, _ = hasher.Write([]byte(s))
+	hash := hasher.Sum64()
+	return int(hash % uint64(nShard))
 }
 
 func (s *server) handleSetCommand(clientId int64, conn io.Writer, command []any) error {
@@ -246,7 +266,10 @@ func (s *server) handleSetCommand(clientId int64, conn io.Writer, command []any)
 		slog.Int64("clientId", clientId),
 	)
 
-	s.database.Store(key, value)
+	shard := calculateShard(key)
+	s.dbLock[shard].Lock()
+	s.database[shard][key] = value
+	s.dbLock[shard].Unlock()
 
 	_, err := conn.Write([]byte("+OK\r\n"))
 	return err
