@@ -1,6 +1,7 @@
 package goredis
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -82,6 +83,46 @@ func TestServerBootstrap(t *testing.T) {
 
 	if string(buff[:nRead]) != "$6\r\nvalue1\r\n" {
 		t.Errorf("calling GET should return 'value1' response, but istead it returns '%s'", string(buff[:nRead]))
+		return
+	}
+
+	// Stopping the server 10 times
+	// By right, only one of them should success and the rest should return aerrors.
+	stopErrorChan := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			err := server.Stop()
+			stopErrorChan <- err
+		}()
+	}
+
+	nSuccess := 0
+	nError := 0
+	for i := 0; i < n; i++ {
+		err := <-stopErrorChan
+		if err != nil {
+			nError++
+		} else {
+			nSuccess++
+		}
+	}
+
+	if nSuccess != 1 {
+		t.Error("there should exactly one invocation of `Stop` that succeded")
+		return
+	}
+	if nError != n-1 {
+		t.Error("there should exactly n-1 invocation of `Stop` that fails")
+		return
+	}
+
+	if err = <-startErrorChan; err != nil {
+		t.Error("after stopped, the first call to `Start` should return nil")
+		return
+	}
+
+	if _, err := client.Read(buff); err == nil || !errors.Is(err, io.EOF) {
+		t.Error("after stop complete, all client should be disconnected")
 		return
 	}
 }
