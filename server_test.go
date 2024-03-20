@@ -178,6 +178,16 @@ func TestServerBootstrap(t *testing.T) {
 // cpu: AMD Ryzen 9 7900X 12-Core Processor
 // BenchmarkRedisSet
 // BenchmarkRedisSet-24            10105432              1137 ns/op            879793 ops/sec           623 B/op         47 allocs/op
+//
+// Use 1000 sharding:
+// Note that starting from here, the benchmark will be run using N=20000000 (20 million ops) instead of 10 seconds. The reason
+// is because 10 seconds testing translates into a lot of inserts, which can cause OOM.
+// goos: linux
+// goarch: amd64
+// pkg: github.com/jauhararifin/goredis
+// cpu: AMD Ryzen 9 7900X 12-Core Processor
+// BenchmarkRedisSet
+// BenchmarkRedisSet-24            20000000               184.7 ns/op         5414671 ops/sec           580 B/op         42 allocs/op
 func BenchmarkRedisSet(b *testing.B) {
 	_ = os.Remove(sockfilePath)
 	listener, err := net.Listen("unix", sockfilePath)
