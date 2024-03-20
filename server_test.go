@@ -170,6 +170,14 @@ func TestServerBootstrap(t *testing.T) {
 // cpu: AMD Ryzen 9 7900X 12-Core Processor
 // BenchmarkRedisSet
 // BenchmarkRedisSet-24            13067581               836.2 ns/op         1195954 ops/sec           650 B/op         42 allocs/op
+//
+// Try sync.Map instead of map[string]string + RWMutex
+// goos: linux
+// goarch: amd64
+// pkg: github.com/jauhararifin/goredis
+// cpu: AMD Ryzen 9 7900X 12-Core Processor
+// BenchmarkRedisSet
+// BenchmarkRedisSet-24             9602935              1243 ns/op            804487 ops/sec           628 B/op         47 allocs/op
 func BenchmarkRedisSet(b *testing.B) {
 	_ = os.Remove(sockfilePath)
 	listener, err := net.Listen("unix", sockfilePath)
