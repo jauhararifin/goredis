@@ -149,12 +149,6 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 			break
 		}
 
-		s.logger.Debug(
-			"request received",
-			slog.Any("request", request),
-			slog.Int64("clientId", clientId),
-		)
-
 		if len(request) == 0 {
 			s.logger.Error("missing command in the request", slog.Int64("clientId", clientId))
 			break
@@ -168,9 +162,9 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 
 		switch strings.ToUpper(commandName) {
 		case "GET":
-			err = s.handleGetCommand(clientId, writer, request)
+			err = s.handleGetCommand(writer, request)
 		case "SET":
-			err = s.handleSetCommand(clientId, writer, request)
+			err = s.handleSetCommand(writer, request)
 		default:
 			s.logger.Error("unknown command", slog.String("command", commandName), slog.Int64("clientId", clientId))
 			_, err = writer.Write([]byte("-ERR unknown command\r\n"))
@@ -205,7 +199,7 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 	}
 }
 
-func (s *server) handleGetCommand(clientId int64, conn io.Writer, command []any) error {
+func (s *server) handleGetCommand(conn io.Writer, command []any) error {
 	if len(command) < 2 {
 		_, err := conn.Write([]byte("-ERR missing key\r\n"))
 		return err
@@ -216,8 +210,6 @@ func (s *server) handleGetCommand(clientId int64, conn io.Writer, command []any)
 		_, err := conn.Write([]byte("-ERR key is not a string\r\n"))
 		return err
 	}
-
-	s.logger.Debug("GET key", slog.String("key", key), slog.Int64("clientId", clientId))
 
 	shard := calculateShard(key)
 	s.dbLock[shard].RLock()
@@ -241,7 +233,7 @@ func calculateShard(s string) int {
 	return int(hash % uint64(nShard))
 }
 
-func (s *server) handleSetCommand(clientId int64, conn io.Writer, command []any) error {
+func (s *server) handleSetCommand(conn io.Writer, command []any) error {
 	if len(command) < 3 {
 		_, err := conn.Write([]byte("-ERR missing key and value\r\n"))
 		return err
@@ -258,13 +250,6 @@ func (s *server) handleSetCommand(clientId int64, conn io.Writer, command []any)
 		_, err := conn.Write([]byte("-ERR value is not a string\r\n"))
 		return err
 	}
-
-	s.logger.Debug(
-		"SET key into value",
-		slog.String("key", key),
-		slog.String("value", value),
-		slog.Int64("clientId", clientId),
-	)
 
 	shard := calculateShard(key)
 	s.dbLock[shard].Lock()
