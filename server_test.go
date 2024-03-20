@@ -45,4 +45,27 @@ func TestServerBootstrap(t *testing.T) {
 			return
 		}
 	}
+
+	client, err := net.Dial("unix", sockfilePath)
+	if err != nil {
+		t.Errorf("cannot open sock file: %s", err.Error())
+		return
+	}
+
+	if _, err := client.Write([]byte("*3\r\n$3\r\nset\r\n$4\r\nkey1\r\n$6\r\nvalue1\r\n")); err != nil {
+		t.Errorf("cannot send 'SET key1 value1' to server: %s", err.Error())
+		return
+	}
+
+	buff := make([]byte, 4096)
+	nRead, err := io.ReadFull(client, buff[:5])
+	if err != nil {
+		t.Errorf("cannot read server response: %s", err.Error())
+		return
+	}
+
+	if string(buff[:nRead]) != "+OK\r\n" {
+		t.Errorf("calling SET should return 'OK' response, but istead it returns '%s'", string(buff[:nRead]))
+		return
+	}
 }
