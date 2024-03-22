@@ -1,16 +1,14 @@
 package goredis
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"log/slog"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 const nShard = 1000
@@ -123,7 +121,7 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 		slog.String("host", conn.RemoteAddr().String()),
 	)
 
-	reader := bufio.NewReader(conn)
+	reader := newMessageReader(conn)
 	writer := newBufferWriter(conn)
 	go func() {
 		// TODO: handle shutdown for the buffered writer.
@@ -137,38 +135,33 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 	}()
 
 	for {
-		request, err := readArray(reader, true)
+		length, err := reader.ReadArrayLen()
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				s.logger.Error(
-					"error reading from client",
-					slog.Int64("clientId", clientId),
-					slog.String("err", err.Error()),
-				)
-			}
 			break
 		}
-
-		if len(request) == 0 {
-			s.logger.Error("missing command in the request", slog.Int64("clientId", clientId))
+		if length < 1 {
 			break
 		}
-
-		commandName, ok := request[0].(string)
-		if !ok {
-			s.logger.Error("command is not a string", slog.Int64("clientId", clientId))
+		commandName, err := reader.ReadString()
+		if err != nil {
 			break
 		}
+		unsafeToUpper(commandName)
 
-		switch strings.ToUpper(commandName) {
+		switch commandName {
 		case "GET":
-			err = s.handleGetCommand(writer, request)
+			err = s.handleGetCommand(reader, writer)
 		case "SET":
-			err = s.handleSetCommand(writer, request)
+			err = s.handleSetCommand(reader, writer)
 		default:
 			s.logger.Error("unknown command", slog.String("command", commandName), slog.Int64("clientId", clientId))
 			_, err = writer.Write([]byte("-ERR unknown command\r\n"))
-			break
+
+			for i := 1; i < length; i++ {
+				if _, err = reader.ReadString(); err != nil {
+					break
+				}
+			}
 		}
 
 		if err != nil {
@@ -199,15 +192,21 @@ func (s *server) handleConn(clientId int64, conn net.Conn) {
 	}
 }
 
-func (s *server) handleGetCommand(conn io.Writer, command []any) error {
-	if len(command) < 2 {
-		_, err := conn.Write([]byte("-ERR missing key\r\n"))
-		return err
-	}
+func unsafeToUpper(s string) {
+	bytes := unsafe.Slice(unsafe.StringData(s), len(s))
 
-	key, ok := command[1].(string)
-	if !ok {
-		_, err := conn.Write([]byte("-ERR key is not a string\r\n"))
+	for i := 0; i < len(bytes); i++ {
+		b := bytes[i]
+		if b >= 'a' && b <= 'z' {
+			b = b + 'A' - 'a'
+			bytes[i] = b
+		}
+	}
+}
+
+func (s *server) handleGetCommand(reader *messageReader, conn io.Writer) error {
+	key, err := reader.ReadString()
+	if err != nil {
 		return err
 	}
 
@@ -216,7 +215,6 @@ func (s *server) handleGetCommand(conn io.Writer, command []any) error {
 	value, ok := s.database[shard][key]
 	s.dbLock[shard].RUnlock()
 
-	var err error
 	if ok {
 		resp := fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 		_, err = conn.Write([]byte(resp))
@@ -233,21 +231,14 @@ func calculateShard(s string) int {
 	return int(hash % uint64(nShard))
 }
 
-func (s *server) handleSetCommand(conn io.Writer, command []any) error {
-	if len(command) < 3 {
-		_, err := conn.Write([]byte("-ERR missing key and value\r\n"))
+func (s *server) handleSetCommand(reader *messageReader, conn io.Writer) error {
+	key, err := reader.ReadString()
+	if err != nil {
 		return err
 	}
 
-	key, ok := command[1].(string)
-	if !ok {
-		_, err := conn.Write([]byte("-ERR key is not a string\r\n"))
-		return err
-	}
-
-	value, ok := command[2].(string)
-	if !ok {
-		_, err := conn.Write([]byte("-ERR value is not a string\r\n"))
+	value, err := reader.ReadString()
+	if err != nil {
 		return err
 	}
 
@@ -256,6 +247,6 @@ func (s *server) handleSetCommand(conn io.Writer, command []any) error {
 	s.database[shard][key] = value
 	s.dbLock[shard].Unlock()
 
-	_, err := conn.Write([]byte("+OK\r\n"))
+	_, err = conn.Write([]byte("+OK\r\n"))
 	return err
 }

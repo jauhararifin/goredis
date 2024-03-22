@@ -196,6 +196,19 @@ func TestServerBootstrap(t *testing.T) {
 // cpu: AMD Ryzen 9 7900X 12-Core Processor
 // BenchmarkRedisSet
 // BenchmarkRedisSet-24            20000000               140.9 ns/op         7099550 ops/sec           316 B/op         36 allocs/op
+//
+// After reducing allocation:
+// goos: linux
+// goarch: amd64
+// pkg: github.com/jauhararifin/goredis
+// cpu: AMD Ryzen 9 7900X 12-Core Processor
+// BenchmarkRedisSet
+// BenchmarkRedisSet-24            20000000               151.6 ns/op         6597840 ops/sec           164 B/op          4 allocs/op
+//
+// It seems like this version has performance degradation, but actually if we benchmark it using `redis-benchmark`, it can reach 9Mil ops/sec:
+// redis-benchmark -h localhost -p 3100 -r 100000000000 -P 10000 -c 24 -t SET,GET -q -n 20000000
+// SET: 9818361.00 requests per second, p50=4.687 msec
+// GET: 18083184.00 requests per second, p50=5.831 msec
 func BenchmarkRedisSet(b *testing.B) {
 	_ = os.Remove(sockfilePath)
 	listener, err := net.Listen("unix", sockfilePath)

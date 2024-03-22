@@ -1,114 +1,180 @@
 package goredis
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"strings"
 )
 
-func readObject(r io.Reader) (any, error) {
-	b, err := readOne(r)
-	if err != nil {
-		return nil, err
-	}
+type messageReader struct {
+	r             *bufio.Reader
+	temp          []byte
+	stringBuilder strings.Builder
+}
 
-	switch b {
-	case '*':
-		return readArray(r, false)
-	case '$':
-		return readBulkString(r)
-	default:
-		return nil, fmt.Errorf("unrecognized character %c", b)
+func newMessageReader(r io.Reader) *messageReader {
+	return &messageReader{
+		r:             bufio.NewReader(r),
+		temp:          make([]byte, 4096),
+		stringBuilder: strings.Builder{},
 	}
 }
 
-func readBulkString(r io.Reader) (string, error) {
-	size, err := readLength(r)
-	if err != nil {
-		return "", err
-	}
-
-	buff := make([]byte, size)
-	if _, err := io.ReadFull(r, buff); err != nil {
-		return "", err
-	}
-
-	b, err := readOne(r)
-	if err != nil {
-		return "", err
-	}
-	if b != '\r' {
-		return "", fmt.Errorf("expected carriage-return character for array, but found %c", b)
-	}
-
-	b, err = readOne(r)
-	if err != nil {
-		return "", err
-	}
-	if b != '\n' {
-		return "", fmt.Errorf("expected newline character for array, but found %c", b)
-	}
-
-	return string(buff), nil
-}
-
-func readArray(r io.Reader, readFirstChar bool) ([]any, error) {
-	if readFirstChar {
-		b, err := readOne(r)
-		if err != nil {
-			return nil, err
-		}
-		if b != '*' {
-			return nil, fmt.Errorf("expected * character for array, but found %c", b)
-		}
-	}
-
-	n, err := readLength(r)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]any, n)
-	for i := 0; i < n; i++ {
-		val, err := readObject(r)
-		if err != nil {
-			return nil, err
-		}
-		result[i] = val
-	}
-
-	return result, nil
-}
-
-func readOne(r io.Reader) (byte, error) {
-	buff := [1]byte{}
-	n, err := r.Read(buff[:])
+func (m *messageReader) ReadArrayLen() (length int, err error) {
+	b, err := m.r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if n != 1 {
-		return 0, io.EOF
+
+	if b != '*' {
+		return 0, fmt.Errorf("malformed input")
 	}
-	return buff[0], nil
+
+	length, err = m.readValueLength()
+	if err != nil {
+		return 0, err
+	}
+
+	return length, nil
 }
 
-func readLength(r io.Reader) (int, error) {
-	result := 0
-	for {
-		b, err := readOne(r)
+func (m *messageReader) readValueLength() (int, error) {
+	b, err := m.r.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+
+	if b < '0' || b > '9' {
+		return 0, fmt.Errorf("malformed input")
+	}
+	result := int(b - '0')
+
+	for b != '\r' {
+		b, err = m.r.ReadByte()
 		if err != nil {
 			return 0, err
 		}
-		if b == '\r' {
-			break
+
+		if b != '\r' {
+			if b < '0' || b > '9' {
+				return 0, fmt.Errorf("malformed input")
+			}
+			result = result*10 + int(b-'0')
 		}
-		result = result*10 + int(b-'0')
 	}
-	b, err := readOne(r)
+
+	b, err = m.r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
 	if b != '\n' {
-		return 0, fmt.Errorf("expected newline character for length, but found %c", b)
+		return 0, fmt.Errorf("malformed input")
 	}
+
 	return result, nil
+}
+
+func (m *messageReader) readUntilCRLF(w io.Writer) error {
+	b, err := m.r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	for b != '\r' {
+		if _, err := w.Write([]byte{b}); err != nil {
+			return err
+		}
+
+		b, err = m.r.ReadByte()
+		if err != nil {
+			return err
+		}
+	}
+
+	b, err = m.r.ReadByte()
+	if err != nil {
+		return err
+	}
+	if b != '\n' {
+		return fmt.Errorf("malformed input")
+	}
+
+	return nil
+}
+
+func (m *messageReader) skipCRLF() error {
+	b, err := m.r.ReadByte()
+	if err != nil {
+		return err
+	}
+	if b != '\r' {
+		return fmt.Errorf("malformed input")
+	}
+
+	b, err = m.r.ReadByte()
+	if err != nil {
+		return err
+	}
+	if b != '\n' {
+		return fmt.Errorf("malformed input")
+	}
+
+	return nil
+}
+
+func (m *messageReader) ReadString() (string, error) {
+	b, err := m.r.ReadByte()
+	if err != nil {
+		return "", err
+	}
+
+	if b == '$' {
+		length, err := m.readValueLength()
+		if err != nil {
+			return "", err
+		}
+
+		m.stringBuilder.Reset()
+		m.stringBuilder.Grow(length)
+		if err := m.pipeToWriter(&m.stringBuilder, length); err != nil {
+			return "", err
+		}
+
+		s := m.stringBuilder.String()
+		if err := m.skipCRLF(); err != nil {
+			return "", err
+		}
+
+		return s, nil
+	} else if b == '+' {
+		m.stringBuilder.Reset()
+		if err := m.readUntilCRLF(&m.stringBuilder); err != nil {
+			return "", err
+		}
+		return m.stringBuilder.String(), nil
+	} else {
+		return "", fmt.Errorf("malformed input")
+	}
+}
+
+func (m *messageReader) pipeToWriter(w io.Writer, length int) error {
+	remaining := length
+	for remaining > 0 {
+		n := remaining
+		if n > len(m.temp) {
+			n = len(m.temp)
+		}
+
+		if _, err := io.ReadFull(m.r, m.temp[:n]); err != nil {
+			return err
+		}
+		remaining -= n
+
+		if _, err := w.Write(m.temp[:n]); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
