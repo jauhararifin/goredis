@@ -209,6 +209,15 @@ func TestServerBootstrap(t *testing.T) {
 // redis-benchmark -h localhost -p 3100 -r 100000000000 -P 10000 -c 24 -t SET,GET -q -n 20000000
 // SET: 9985022.00 requests per second, p50=4.207 msec
 // GET: 16792612.00 requests per second, p50=6.151 msec
+//
+// Increasing the test pipeline size into 10000:
+//
+// goos: linux
+// goarch: amd64
+// pkg: github.com/jauhararifin/goredis
+// cpu: AMD Ryzen 9 7900X 12-Core Processor
+// BenchmarkRedisSet
+// BenchmarkRedisSet-24            20000000                86.44 ns/op       11568510 ops/sec           165 B/op          4 allocs/op
 func BenchmarkRedisSet(b *testing.B) {
 	_ = os.Remove(sockfilePath)
 	listener, err := net.Listen("unix", sockfilePath)
@@ -239,9 +248,9 @@ func BenchmarkRedisSet(b *testing.B) {
 
 		randomizer := rand.New(rand.NewSource(id.Add(1)))
 
-		pipelineSize := 100
+		pipelineSize := 10000
 
-		buff := make([]byte, 4096)
+		buff := make([]byte, 409600)
 		writeBuffer := bytes.Buffer{}
 		count := 0
 
