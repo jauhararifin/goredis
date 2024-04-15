@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/jauhararifin/goredis/swisstable"
 )
 
 const nShard = 1000
@@ -24,7 +26,7 @@ type server struct {
 	shuttingDown bool
 
 	dbLock   [nShard]sync.RWMutex
-	database [nShard]map[string]string
+	database [nShard]*swisstable.Map
 }
 
 func NewServer(listener net.Listener, logger *slog.Logger) *server {
@@ -39,11 +41,11 @@ func NewServer(listener net.Listener, logger *slog.Logger) *server {
 		shuttingDown: false,
 
 		dbLock:   [nShard]sync.RWMutex{},
-		database: [nShard]map[string]string{},
+		database: [nShard]*swisstable.Map{},
 	}
 
 	for i := 0; i < nShard; i++ {
-		s.database[i] = make(map[string]string)
+		s.database[i] = swisstable.NewMap(100)
 	}
 
 	return s
@@ -212,7 +214,7 @@ func (s *server) handleGetCommand(reader *messageReader, conn io.Writer) error {
 
 	shard := calculateShard(key)
 	s.dbLock[shard].RLock()
-	value, ok := s.database[shard][key]
+	value, ok := s.database[shard].Get(key)
 	s.dbLock[shard].RUnlock()
 
 	if ok {
@@ -244,7 +246,7 @@ func (s *server) handleSetCommand(reader *messageReader, conn io.Writer) error {
 
 	shard := calculateShard(key)
 	s.dbLock[shard].Lock()
-	s.database[shard][key] = value
+	s.database[shard].Put(key, value)
 	s.dbLock[shard].Unlock()
 
 	_, err = conn.Write([]byte("+OK\r\n"))
